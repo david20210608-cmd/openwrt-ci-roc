@@ -348,7 +348,12 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: ${{ env.ARTIFACT_NAME }}
-        path: ${{ steps.organize.outputs.firmware_path }}/*
+        path: |
+          ${{ steps.organize.outputs.firmware_path }}/*.bin
+          ${{ steps.organize.outputs.firmware_path }}/*.ubi
+          ${{ steps.organize.outputs.firmware_path }}/*.config
+          ${{ steps.organize.outputs.firmware_path }}/*.manifest
+          ${{ steps.organize.outputs.firmware_path }}/*.buildinfo
         if-no-files-found: error
         compression-level: 0
         overwrite: true
