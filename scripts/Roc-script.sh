@@ -310,6 +310,17 @@ if package_enabled luci-app-athena-led luci-i18n-athena-led-zh-cn; then
   chmod +x package/luci-app-athena-led/root/etc/init.d/athena_led package/luci-app-athena-led/root/usr/sbin/athena-led
 fi
 
+# Tailscale 必须与 golang 工具链配对。本脚本把 golang 换成了 laipeng668/packages@master
+# （Go 1.27），但 openwrt-25.12 分支里的 tailscale 1.98.3 锁的 go-json-experiment/json 是
+# 2025-08 快照，其 alias.go 在 Go 1.27 默认启用的 goexperiment.jsonv2 下引用已改名的
+# encoding/json/v2 符号（undefined: json.SkipFunc / DiscardUnknownMembers），编不过。
+# 换成与 Go 1.27 配对的 @master 版本。
+if package_enabled tailscale luci-app-tailscale-community; then
+  rm -rf feeds/packages/net/tailscale
+  git_sparse_clone master https://github.com/immortalwrt/packages net/tailscale
+  mv package/tailscale feeds/packages/net/tailscale
+fi
+
 ### PassWall & OpenClash ###
 
 if package_enabled luci-app-passwall luci-app-passwall2; then
