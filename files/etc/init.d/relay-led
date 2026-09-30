@@ -1,0 +1,25 @@
+#!/bin/sh /etc/rc.common
+# 中继状态灯开关。本身不常驻，由 /etc/hotplug.d/iface/50-relay-led 驱动。
+
+START=97
+STOP=10
+
+EXTRA_COMMANDS="show"
+EXTRA_HELP="	show	显示当前每路状态与判定结果"
+
+start() {
+	/usr/sbin/relay-led refresh
+}
+
+stop() {
+	/usr/sbin/relay-led off
+}
+
+disable() {
+	/usr/sbin/relay-led off
+	rm -f /etc/rc.d/S??relay-led /etc/rc.d/K??relay-led
+}
+
+show() {
+	/usr/sbin/relay-led status
+}

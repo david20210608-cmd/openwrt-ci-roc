@@ -5,3 +5,6 @@ LICENSE text eol=lf
 *.yaml text eol=lf
 *.config text eol=lf
 *.md text eol=lf
+files/usr/sbin/relay-led text eol=lf
+files/etc/init.d/relay-led text eol=lf
+files/etc/hotplug.d/iface/50-relay-led text eol=lf

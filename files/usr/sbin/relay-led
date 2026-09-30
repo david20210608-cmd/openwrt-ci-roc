@@ -1,0 +1,179 @@
+#!/bin/sh
+# 中继状态灯：用 red/green/blue:status 指示无线中继上游的健康度。
+#
+# level = 当前最高优先级的存活链路的序号
+#   0      全部存活        -> 灭
+#   1..N   第 level 优先的那条是还活着的最好的一条
+#    N+1    全部故障        -> 红
+# 取色：查 color_rg() —— R、G 都可变，全挂档自动落到 G=0。
+#
+# "存活" = STATUS 为 online 或 disconnecting（信号在抖、但还没判死的窗口期）。
+# 这么定的原因：mwan3track 主循环里 disconnecting->online 的恢复只写 STATUS、
+# 不发 hotplug（源码 414-416 行），所以"抖"这个中间态不能改变灯 —— 一旦改了
+# 就没人负责改回来，灯会锁到下一次碰巧有别的 hotplug 路过。把 disconnecting
+# 算作存活后，该转移落在同一档上，不需要撤销，灯只随"能发 hotplug 的转移"变。
+#
+# 优先级来自静态配置：mwan3 成员 -> wireless 里绑它的 sta -> 该 radio 的频段(5g 优先)
+# 及 radio 序号。认不出频段的成员排最后。
+#
+# 测试用环境变量：RELAY_LED_STATE 可指向一个假的 mwan3track 目录。
+
+LEDS=${RELAY_LED_LEDS:-/sys/class/leds}
+STATE=${RELAY_LED_STATE:-/var/run/mwan3track}
+
+attr() { cat "$LEDS/$1:status/$2" 2>/dev/null; }
+
+cur_trigger() {
+	sed -n 's/.*\[\([^]]*\)\].*/\1/p' "$LEDS/$1:status/trigger" 2>/dev/null
+}
+
+# 手调色表：键 "N:level" -> "红 绿" 两个亮度。手动调色只改这里。
+# 未列出的组合走等距公式（R 恒 255，G = 255*(N+1-level)/N，全挂档自然得 G=0）。
+color_rg() {
+	case "$2:$1" in
+	2:1) echo "60 73"  ;;   # N=2：掉 radio1 那路
+	2:2) echo "167 53" ;;   # N=2：掉 radio0 那路
+	3:1) echo "35 75"  ;;   # N=3：主 5G 还在
+	3:2) echo "110 70" ;;   # N=3：掉一路 5G
+	3:3) echo "195 45" ;;   # N=3：5G 全挂，只剩 2.4G
+	*)   echo "255 $((255 * ($2 + 1 - $1) / $2))" ;;
+	esac
+}
+
+# 把该网络接口绑为上游的 sta 无线接口所用的 radio 名（如 radio0）
+sta_radio() {
+	local s
+	for s in $(uci -q show wireless | sed -n 's/^wireless\.\([^.]*\)=wifi-iface$/\1/p'); do
+		case " $(uci -q get "wireless.$s.network") " in
+		*" $1 "*)
+			[ "$(uci -q get "wireless.$s.mode")" = sta ] || continue
+			uci -q get "wireless.$s.device"
+			return
+			;;
+		esac
+	done
+}
+
+# 排序键：5g 在前，同频段按 radio 序号；认不出的排最后
+prio_key() {
+	local r
+	r=$(sta_radio "$1")
+	if [ -n "$r" ]; then
+		case "$(uci -q get "wireless.$r.band")" in
+		5g) echo "0 ${r#radio}" ;;
+		2g) echo "1 ${r#radio}" ;;
+		*)  echo "9 ${r#radio}" ;;
+		esac
+	else
+		echo "9 99"
+	fi
+}
+
+# 按优先级从高到低列出 mwan3 成员接口
+relay_order() {
+	local s i
+	for s in $(uci -q show mwan3 | sed -n 's/^mwan3\.\([^.]*\)=member$/\1/p'); do
+		i=$(uci -q get "mwan3.$s.interface")
+		[ -n "$i" ] || continue
+		echo "$(prio_key "$i") $i"
+	done | sort | awk '{print $3}'
+}
+
+# 输出 "level N up warn"；无被跟踪的中继上游时返回 1。
+# warn 只供 status 显示（有链路正处在 disconnecting 窗口），不参与取色。
+compute() {
+	local n=0 up=0 best=99 warn=0 i st
+	for i in $(relay_order); do
+		[ -f "$STATE/$i/STATUS" ] || continue
+		n=$((n + 1))
+		st=$(cat "$STATE/$i/STATUS" 2>/dev/null)
+		case "$st" in
+		online)
+			up=$((up + 1)); [ "$best" = 99 ] && best=$n
+			;;
+		disconnecting)
+			up=$((up + 1)); [ "$best" = 99 ] && best=$n
+			warn=1
+			;;
+		esac
+	done
+	[ "$n" -gt 0 ] || return 1
+
+	if [ "$up" -eq "$n" ]; then
+		echo "0 $n $up $warn"
+	elif [ "$up" -eq 0 ]; then
+		echo "$((n + 1)) $n $up $warn"
+	else
+		echo "$best $n $up $warn"
+	fi
+}
+
+# 幂等写一个通道（只有常亮，没有闪烁）
+set_chan() {
+	local ch=$1 want=$2 ct cb
+	ct=$(cur_trigger "$ch")
+	[ -n "$ct" ] || ct=none
+	cb=$(attr "$ch" brightness)
+	[ -n "$cb" ] || cb=0
+
+	[ "$ct" = none ] && [ "$cb" = "$want" ] && return 0
+	echo none > "$LEDS/$ch:status/trigger"
+	echo "$want" > "$LEDS/$ch:status/brightness"
+}
+
+do_off() {
+	local ch
+	for ch in red green blue; do
+		echo none > "$LEDS/$ch:status/trigger" 2>/dev/null
+		echo 0 > "$LEDS/$ch:status/brightness" 2>/dev/null
+	done
+}
+
+do_refresh() {
+	local vals level n up warn r g rg
+	vals=$(compute) || return 0
+	set -- $vals
+	level=$1 n=$2 up=$3 warn=$4
+
+	if [ "$level" -eq 0 ]; then
+		r=0 g=0
+	else
+		rg=$(color_rg "$level" "$n")
+		r=${rg% *}
+		g=${rg#* }
+	fi
+
+	set_chan red "$r"
+	set_chan green "$g"
+	set_chan blue 0
+}
+
+do_status() {
+	local i vals col rg
+	for i in $(relay_order); do
+		[ -f "$STATE/$i/STATUS" ] || continue
+		printf '%-12s %-14s score=%-4s prio=%s\n' \
+			"$i" "$(cat "$STATE/$i/STATUS" 2>/dev/null)" \
+			"$(cat "$STATE/$i/SCORE" 2>/dev/null)" "$(prio_key "$i")"
+	done
+	vals=$(compute) || { echo '--> 无被跟踪的中继上游，不动作'; return 0; }
+	set -- $vals
+	if [ "$1" -eq 0 ]; then
+		col="灭"
+	else
+		rg=$(color_rg "$1" "$2")
+		col="R${rg% *} G${rg#* }"
+	fi
+	printf '--> level=%s N=%s 存活=%s 抖动=%s  颜色=%s\n' \
+		"$1" "$2" "$3" "$([ "$4" = 1 ] && echo 是 || echo 否)" "$col"
+}
+
+case "$1" in
+off)      do_off ;;
+status)   do_status ;;
+''|refresh) do_refresh ;;
+*)
+	echo "用法: $(basename "$0") [refresh|off|status]" >&2
+	exit 1
+	;;
+esac

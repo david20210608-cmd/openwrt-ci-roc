@@ -135,6 +135,18 @@ printf 'Repository\tBranch\tCommit\n' > "$THIRD_PARTY_SOURCES_FILE"
 # 修改默认IP & 固件名称 & 编译署名和时间
 sed -i 's/192.168.1.1/192.168.7.1/g' package/base-files/files/bin/config_generate
 sed -i "s/hostname='.*'/hostname='MX5300'/g" package/base-files/files/bin/config_generate
+
+# 往固件里塞自定义文件：把本仓库 files/ 的内容拷进源码树顶层的 files/。
+# OpenWrt 打包时会把 $(TOPDIR)/files 原样写进 rootfs（include/image.mk 把它传给 prepare_rootfs），
+# 还会自动 enable 其中带 '#!/bin/sh /etc/rc.common' 的 init 脚本，所以 rc.d 软链也会一并进 /rom。
+# 现在放的是 MX5300 的中继状态灯 relay-led 三件套 —— 它不属于任何软件包，不这么做的话
+# 每次 sysupgrade 都会随 overlay 一起丢掉，只能手工恢复。
+if [ -d "$WORKSPACE/files" ]; then
+  mkdir -p "$PWD/files"
+  cp -a "$WORKSPACE/files/." "$PWD/files/"
+  echo "已注入 files/ 自定义文件："
+  find "$PWD/files" -type f
+fi
 luci_system_js="feeds/luci/modules/luci-mod-status/htdocs/luci-static/resources/view/status/include/10_system.js"
 firmware_version_anchor="_('Firmware Version'), (L.isObject(boardinfo.release) ? boardinfo.release.description + ' / ' : '') + (luciversion || ''),"
 grep -Fq "$firmware_version_anchor" "$luci_system_js" || { echo "Error: LuCI firmware version anchor was not found in $luci_system_js" >&2; exit 1; }

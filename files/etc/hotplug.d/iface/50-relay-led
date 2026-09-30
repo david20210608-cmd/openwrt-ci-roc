@@ -1,0 +1,5 @@
+#!/bin/sh
+# mwan3 / netifd 的接口事件 -> 重算中继状态灯。功能未启用时直接返回。
+[ -x /usr/sbin/relay-led ] || exit 0
+ls /etc/rc.d/S*relay-led >/dev/null 2>&1 || exit 0
+/usr/sbin/relay-led refresh

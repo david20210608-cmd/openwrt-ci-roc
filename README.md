@@ -22,6 +22,7 @@
 - 不需要的软件包请把 `y` 改成 `n` ，仅在前面添加 `#` 是无效的。
 - 插件对应名称及功能请参考恩山网友帖子：[OpenWrt软件包全量解释](https://www.right.com.cn/FORUM/forum.php?mod=viewthread&tid=8384897)。
 - 如需修改默认 IP、添加或删除插件包以及一些其他设置请在 `scripts/Roc-script.sh` 文件内修改。
+- 想往固件里放**不属于任何软件包**的文件（自写的 `/usr/sbin/` 工具、`/etc/init.d/` 服务等），放进本仓库的 `files/` 目录即可，目录结构照根文件系统的路径写（例如 `files/usr/sbin/mytool`、`files/etc/init.d/myservice`）。构建时会拷进源码树的顶层 `files/`，OpenWrt 打包时原样写进 `/rom`；其中的 init 脚本还会被自动 `enable`，rc.d 软链一并进固件。这样放的东西相当于固件自带，`sysupgrade` 不会再丢。注意该目录**对所有机型生效**，只放通用或空转无害的内容。
 - 固件构建只会拉取设备配置和 `configs/General.config` 中实际启用的第三方软件包，并始终使用对应分支的最新提交。
 - 每次固件构建都会记录第三方仓库的实际分支和 commit，并在 Release 中附带 `<固件前缀>.third-party-sources.txt` 供核对；该记录文件不会写入固件。
 - 添加或修改 `xx.yml` 文件，最后点击 `Actions` 运行要编译的 `workflow` 即可开始编译。
