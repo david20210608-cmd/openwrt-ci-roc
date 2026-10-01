@@ -322,14 +322,22 @@ if package_enabled tailscale luci-app-tailscale-community; then
 fi
 
 # rtp2httpd：feed（immortalwrt/packages@openwrt-25.12，与源码树 feeds.conf.default 同分支）
-# 钉在 3.16.0，上游 stackia 已到 3.17.1。克隆同一分支的包目录、仅抬 PKG_VERSION/PKG_HASH
-# （新 hash 为 codeload v3.17.1 tarball 实测值），init/uci 文件保持 feed 原样，LuCI app 不受影响。
+# 版本滞后于上游。克隆同一分支的包目录后跟踪 stackia 最新 release：从 releases/latest
+# 的 302 跳转解析版本号（不走 API，无速率限制），codeload tarball 现算 sha256 回填。
 if package_enabled rtp2httpd luci-app-rtp2httpd; then
   rm -rf feeds/packages/net/rtp2httpd
   git_sparse_clone openwrt-25.12 https://github.com/immortalwrt/packages net/rtp2httpd
+  rtp2httpd_tag_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/stackia/rtp2httpd/releases/latest)"
+  rtp2httpd_version="${rtp2httpd_tag_url##*/}"
+  rtp2httpd_version="${rtp2httpd_version#v}"
+  printf '%s' "$rtp2httpd_version" | grep -qE '^[0-9]+(\.[0-9]+)+$' || {
+    echo "Error: failed to resolve latest rtp2httpd version from: $rtp2httpd_tag_url" >&2
+    exit 1
+  }
+  rtp2httpd_hash="$(curl -fsSL "https://codeload.github.com/stackia/rtp2httpd/tar.gz/v${rtp2httpd_version}?" | sha256sum | cut -d' ' -f1)"
   sed -i \
-    -e 's/^PKG_VERSION:=.*/PKG_VERSION:=3.17.1/' \
-    -e 's/^PKG_HASH:=.*/PKG_HASH:=80a79f148f8a6fc412dcfe2d45b4b552869a4a98f21b3128eafe75933580a740/' \
+    -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${rtp2httpd_version}/" \
+    -e "s/^PKG_HASH:=.*/PKG_HASH:=${rtp2httpd_hash}/" \
     package/rtp2httpd/Makefile
   mv package/rtp2httpd feeds/packages/net/rtp2httpd
 fi
