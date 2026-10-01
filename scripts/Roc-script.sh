@@ -321,6 +321,19 @@ if package_enabled tailscale luci-app-tailscale-community; then
   mv package/tailscale feeds/packages/net/tailscale
 fi
 
+# rtp2httpd：feed（immortalwrt/packages@openwrt-25.12，与源码树 feeds.conf.default 同分支）
+# 钉在 3.16.0，上游 stackia 已到 3.17.1。克隆同一分支的包目录、仅抬 PKG_VERSION/PKG_HASH
+# （新 hash 为 codeload v3.17.1 tarball 实测值），init/uci 文件保持 feed 原样，LuCI app 不受影响。
+if package_enabled rtp2httpd luci-app-rtp2httpd; then
+  rm -rf feeds/packages/net/rtp2httpd
+  git_sparse_clone openwrt-25.12 https://github.com/immortalwrt/packages net/rtp2httpd
+  sed -i \
+    -e 's/^PKG_VERSION:=.*/PKG_VERSION:=3.17.1/' \
+    -e 's/^PKG_HASH:=.*/PKG_HASH:=80a79f148f8a6fc412dcfe2d45b4b552869a4a98f21b3128eafe75933580a740/' \
+    package/rtp2httpd/Makefile
+  mv package/rtp2httpd feeds/packages/net/rtp2httpd
+fi
+
 ### PassWall & OpenClash ###
 
 if package_enabled luci-app-passwall luci-app-passwall2; then
