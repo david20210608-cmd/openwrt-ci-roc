@@ -322,24 +322,64 @@ if package_enabled tailscale luci-app-tailscale-community; then
 fi
 
 # rtp2httpd：feed（immortalwrt/packages@openwrt-25.12，与源码树 feeds.conf.default 同分支）
-# 版本滞后于上游。克隆同一分支的包目录后跟踪 stackia 最新 release：从 releases/latest
-# 的 302 跳转解析版本号（不走 API，无速率限制），codeload tarball 现算 sha256 回填。
+# 版本滞后于上游。跟踪 stackia 最新 release：从 releases/latest 的 302 跳转解析版本号
+# （不走 API，无速率限制），codeload tarball 现算 sha256 回填。
+# ★ daemon 抬版必须同步抬界面与 init：feed 的 luci-app-rtp2httpd（feeds/luci）和 init
+#   是 3.16 时代写的，只抬 daemon 会造成 LuCI 显示参数与实际支持参数不一致。
+#   上游 openwrt-support/ 提供配套三件套（daemon Makefile.versioned + init/默认配置
+#   + luci-app），三件全部取自同一 tarball 并钉同一版本。
 if package_enabled rtp2httpd luci-app-rtp2httpd; then
   rm -rf feeds/packages/net/rtp2httpd
   git_sparse_clone openwrt-25.12 https://github.com/immortalwrt/packages net/rtp2httpd
-  rtp2httpd_tag_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/stackia/rtp2httpd/releases/latest)"
+  rtp2httpd_tag_url="$(curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors -o /dev/null -w '%{url_effective}' https://github.com/stackia/rtp2httpd/releases/latest)"
   rtp2httpd_version="${rtp2httpd_tag_url##*/}"
   rtp2httpd_version="${rtp2httpd_version#v}"
   printf '%s' "$rtp2httpd_version" | grep -qE '^[0-9]+(\.[0-9]+)+$' || {
     echo "Error: failed to resolve latest rtp2httpd version from: $rtp2httpd_tag_url" >&2
     exit 1
   }
-  rtp2httpd_hash="$(curl -fsSL "https://codeload.github.com/stackia/rtp2httpd/tar.gz/v${rtp2httpd_version}?" | sha256sum | cut -d' ' -f1)"
-  sed -i \
-    -e "s/^PKG_VERSION:=.*/PKG_VERSION:=${rtp2httpd_version}/" \
-    -e "s/^PKG_HASH:=.*/PKG_HASH:=${rtp2httpd_hash}/" \
-    package/rtp2httpd/Makefile
+  rtp2httpd_tmp="$(mktemp -d)"
+  curl -fsSL --retry 5 --retry-delay 3 --retry-all-errors \
+    "https://codeload.github.com/stackia/rtp2httpd/tar.gz/v${rtp2httpd_version}?" \
+    -o "$rtp2httpd_tmp/src.tar.gz"
+  rtp2httpd_hash="$(sha256sum "$rtp2httpd_tmp/src.tar.gz" | cut -d' ' -f1)"
+  tar -xzf "$rtp2httpd_tmp/src.tar.gz" -C "$rtp2httpd_tmp" --strip-components=1 \
+    "rtp2httpd-${rtp2httpd_version}/openwrt-support"
+  # daemon 包：上游 Makefile.versioned（配套 init + 默认 UCI + /etc/rtp2httpd.conf）钉版本替换
   mv package/rtp2httpd feeds/packages/net/rtp2httpd
+  rm -f feeds/packages/net/rtp2httpd/Makefile feeds/packages/net/rtp2httpd/files/*
+  cp "$rtp2httpd_tmp/openwrt-support/rtp2httpd/Makefile.versioned" feeds/packages/net/rtp2httpd/Makefile
+  cp "$rtp2httpd_tmp"/openwrt-support/rtp2httpd/files/* feeds/packages/net/rtp2httpd/files/
+  sed -i \
+    -e "s/^RELEASE_VERSION:=.*/RELEASE_VERSION:=${rtp2httpd_version}/" \
+    -e "s/^PKG_HASH:=.*/PKG_HASH:=${rtp2httpd_hash}/" \
+    feeds/packages/net/rtp2httpd/Makefile
+  # luci-app：上游新版界面（use_config_file/advanced_interface_settings 等新参数）同版替换
+  rm -rf feeds/luci/applications/luci-app-rtp2httpd
+  cp -a "$rtp2httpd_tmp/openwrt-support/luci-app-rtp2httpd" feeds/luci/applications/luci-app-rtp2httpd
+  cp "$rtp2httpd_tmp/openwrt-support/luci-app-rtp2httpd/Makefile.versioned" \
+    feeds/luci/applications/luci-app-rtp2httpd/Makefile
+  sed -i "s/^RELEASE_VERSION:=.*/RELEASE_VERSION:=${rtp2httpd_version}/" \
+    feeds/luci/applications/luci-app-rtp2httpd/Makefile
+  # 旧配置迁移（feed 3.16 → 上游 3.17+，随 luci-app 打包，刷机首启执行）：
+  # section type instance→rtp2httpd；enabled 取反为 disabled；
+  # 配了具体上游接口的进 advanced 模式；清掉新版已删除的 zerocopy_on_send
+  mkdir -p feeds/luci/applications/luci-app-rtp2httpd/root/etc/uci-defaults
+  cat > feeds/luci/applications/luci-app-rtp2httpd/root/etc/uci-defaults/40-rtp2httpd-migrate-feed-config <<'MIGRATE'
+#!/bin/sh
+for sec in $(uci -q show rtp2httpd | sed -n 's/^rtp2httpd\.\([^.=]*\)=instance$/\1/p'); do
+  _en="$(uci -q get "rtp2httpd.$sec.enabled")"
+  uci set "rtp2httpd.$sec=rtp2httpd"
+  uci -q delete "rtp2httpd.$sec.enabled"
+  [ "$_en" = "1" ] && uci set "rtp2httpd.$sec.disabled=0" || uci set "rtp2httpd.$sec.disabled=1"
+  [ -n "$(uci -q get "rtp2httpd.$sec.upstream_interface_multicast")" ] &&
+    uci set "rtp2httpd.$sec.advanced_interface_settings=1"
+  uci -q delete "rtp2httpd.$sec.zerocopy_on_send"
+done
+uci commit rtp2httpd
+exit 0
+MIGRATE
+  rm -rf "$rtp2httpd_tmp"
 fi
 
 ### PassWall & OpenClash ###
